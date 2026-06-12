@@ -1,0 +1,254 @@
+================================================================================
+ADVENTUREWORKS ANALYTICS — PROJECT PROGRESS TRACKER
+================================================================================
+Last updated  : [UPDATE THIS EACH SESSION]
+Last session  : [BRIEF NOTE — e.g. "Completed staging DDL, started mart DDL"]
+Current phase : [UPDATE THIS — e.g. "Phase 1 — Database Design"]
+================================================================================
+
+HOW TO USE THIS FILE
+--------------------------------------------------------------------------------
+Claude Code reads this file at the start of every session.
+Update the header above and mark tasks [DONE] as you complete them.
+Add notes under each task if something important was decided or changed.
+Never delete completed tasks — keep the full history visible.
+
+================================================================================
+PHASE 0 — PROJECT SETUP
+================================================================================
+
+[DONE] Define project scope and tech stack
+[DONE] Define business questions (C-suite focused, 6 core questions)
+[DONE] Analyse source CSV files — schema, grain, referential integrity
+[DONE] Extend dataset to 2020–2026 (fact_sales: 341k rows, fact_returns: 4.5k rows)
+[DONE] Add AU/NZ territories (keys 11–15, Pacific continent)
+[DONE] Rekey dim_customer (1–18,148) and dim_product (1–293)
+[DONE] Lock folder architecture
+[DONE] Generate PowerShell script to create folder/file structure
+[DONE] Write CLAUDE.md (root)
+[DONE] Write docs/architecture.md
+[DONE] Write docs/business_questions.md
+[DONE] Write docs/data_dictionary.md
+[ ] Write README.md
+[ ] Add generate_schema_name.sql to dbt/macros/
+[ ] Copy final CSVs to /data/ folder
+[ ] Copy dim_product_category.csv and dim_product_subcategory.csv to dbt/seeds/
+
+================================================================================
+PHASE 1 — DATABASE DESIGN & DDL
+================================================================================
+
+[ ] 01_create_staging_schema.sql
+      - staging.fact_sales
+      - staging.fact_returns
+      - staging.dim_customer
+      - staging.dim_product
+      - staging.dim_territory
+      - staging.dim_calendar
+      NOTE: All staging tables include loaded_at TIMESTAMP + batch_id VARCHAR(50)
+      NOTE: No surrogate keys in staging — natural keys only
+
+[ ] 02_create_mart_schema.sql
+      - mart.fact_sales         (order_sk CHAR(32) PK — md5)
+      - mart.fact_returns       (return_sk CHAR(32) PK — md5)
+      - mart.dim_customer       (customer_sk INT IDENTITY — SCD2 columns)
+      - mart.dim_product        (product_sk INT IDENTITY — SCD2 columns)
+      - mart.dim_territory      (territory_sk INT IDENTITY — static)
+      - mart.dim_calendar       (Date PK — generated, no surrogate needed)
+      - mart.dim_product_subcategory  (loaded via dbt seed)
+      - mart.dim_product_category     (loaded via dbt seed)
+      NOTE: SCD2 columns — scd_start_date, scd_end_date, scd_is_current, scd_version
+
+[ ] 03_constraints_indexes.sql
+      - Primary key constraints
+      - Foreign key constraints (fact → dim)
+      - Indexes on FK columns for join performance
+      - Index on loaded_at for incremental watermark queries
+
+[ ] Verify DDL — run all 3 scripts in order, confirm schemas and tables created
+[ ] Document any DDL decisions in docs/architecture.md ADR section
+
+================================================================================
+PHASE 2 — PYTHON LOADER
+================================================================================
+
+[ ] utils/logger.py
+      - Rotating log handler
+      - Writes to /logs/pipeline_YYYYMMDD.log
+      - Format: timestamp | level | message
+
+[ ] utils/db_connection.py
+      - SQLAlchemy engine from .env
+      - Connection string: postgresql://user:pass@localhost:5432/adventureworks
+      - Returns engine object — imported by all loader scripts
+
+[ ] utils/file_utils.py
+      - read_csv(filepath) — reads with latin-1 encoding, dayfirst=True
+      - generate_batch_id() — returns YYYYMMDD_HHmmss string
+      - validate_file_exists(filepath) — raises FileNotFoundError if missing
+      - __init__.py — exports all three utils
+
+[ ] loader/load_full.py
+      - Reads all CSVs from /data/
+      - Adds loaded_at = datetime.now() (once per batch)
+      - Adds batch_id = generate_batch_id() (once per batch)
+      - Truncates staging tables before load (full load = clean slate)
+      - Loads to staging schema
+      - Logs row counts per table
+      - Triggers dbt run on completion
+
+[ ] loader/load_incremental.py
+      - Reads CSVs from /data/
+      - Adds loaded_at + batch_id
+      - Appends only — no truncate
+      - dbt handles deduplication via surrogate key
+      - Logs new row counts per table
+
+[ ] .env file
+      - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+      - DATA_PATH=./data
+
+[ ] .env.example — placeholder values, safe to commit
+
+[ ] Test full load — verify row counts match source CSVs
+[ ] Test incremental load — verify no duplicates after re-run
+
+================================================================================
+PHASE 3 — DBT MODELS
+================================================================================
+
+[ ] dbt/profiles.yml — PostgreSQL connection, target: dev
+[ ] dbt/dbt_project.yml — project name, model paths, materialisation defaults
+[ ] dbt/packages.yml — dbt-utils package
+
+[ ] dbt/macros/generate_schema_name.sql  ← CRITICAL: add before first dbt run
+[ ] dbt/macros/generate_surrogate_key.sql
+
+--- STAGING MODELS (views, 1:1 with source) ---
+
+[ ] dbt/models/staging/schema.yml — sources definition pointing to staging schema
+[ ] dbt/models/staging/stg_sales.sql
+      - Cast OrderDate, StockDate to DATE
+      - Cast OrderLineItem, OrderQuantity to SMALLINT
+[ ] dbt/models/staging/stg_returns.sql
+      - Cast ReturnDate to DATE
+      - Cast ReturnQuantity to SMALLINT
+[ ] dbt/models/staging/stg_customer.sql
+      - INITCAP on FirstName, LastName
+      - LOWER + TRIM on EmailAddress
+      - NULLIF on Gender, Prefix
+[ ] dbt/models/staging/stg_product.sql
+      - COALESCE(ProductColor, 'N/A')
+      - NULLIF(ProductSize, '0') → 'N/A'
+      - NULLIF(ProductStyle, '0') → 'N/A'
+[ ] dbt/models/staging/stg_territory.sql
+      - Pass-through, light casting only
+
+--- SNAPSHOTS (SCD Type 2) ---
+
+[ ] dbt/snapshots/snap_customer.sql
+      - strategy: check
+      - unique_key: CustomerKey
+      - check_cols: [AnnualIncome, MaritalStatus, HomeOwner, Occupation]
+[ ] dbt/snapshots/snap_product.sql
+      - strategy: check
+      - unique_key: ProductKey
+      - check_cols: [ProductCost, ProductPrice]
+
+--- SEEDS (static dims) ---
+
+[ ] dbt/seeds/dim_product_category.csv
+[ ] dbt/seeds/dim_product_subcategory.csv
+[ ] Run: dbt seed
+
+--- MART MODELS ---
+
+[ ] dbt/models/mart/schema.yml — model docs + tests
+[ ] dbt/models/mart/dim_customer.sql
+      - Reads from snap_customer
+      - Adds scd_is_current filter logic
+[ ] dbt/models/mart/dim_product.sql
+      - Reads from snap_product
+      - Adds scd_is_current filter logic
+[ ] dbt/models/mart/dim_territory.sql
+      - Reads from stg_territory
+      - Adds territory_sk via ROW_NUMBER or IDENTITY
+[ ] dbt/models/mart/fact_sales.sql
+      - materialised: incremental
+      - unique_key: order_sk
+      - incremental filter: loaded_at > max(loaded_at)
+      - Generates order_sk: md5(OrderNumber || OrderLineItem)
+[ ] dbt/models/mart/fact_returns.sql
+      - materialised: incremental
+      - unique_key: return_sk
+      - Generates return_sk: md5(ReturnDate || TerritoryKey || ProductKey)
+
+--- UTILS MODELS ---
+
+[ ] dbt/models/utils/dim_calendar.sql
+      - Generate dates 2020-01-01 to 2026-12-31
+      - Columns: Date, DateKey, Year, Quarter, Month, MonthName, Week,
+                 DayOfWeek, DayName, IsWeekend, MonthYear, YearMonth
+
+--- TESTS ---
+
+[ ] dbt/tests/assert_sales_keys_valid.sql
+[ ] dbt/tests/assert_no_duplicate_orders.sql
+[ ] Run: dbt test — all tests pass
+
+--- FULL DBT RUN ORDER ---
+[ ] dbt seed → dbt snapshot → dbt run → dbt test
+
+================================================================================
+PHASE 4 — DOCKER + AIRFLOW
+================================================================================
+
+[ ] airflow/Dockerfile
+      - Base: apache/airflow:2.x
+      - Install dbt-postgres + project requirements
+
+[ ] airflow/docker-compose.yml
+      - Services: postgres, airflow-webserver, airflow-scheduler
+      - Volumes: mount /data, /dbt, /loader, /utils
+
+[ ] airflow/requirements.txt
+      - dbt-postgres
+      - psycopg2-binary
+      - sqlalchemy
+      - python-dotenv
+
+[ ] airflow/dags/adventureworks_pipeline.py
+      - Schedule: @daily, catchup=False
+      - Tasks in order:
+          load_to_staging → dbt_seed → dbt_snapshot → dbt_run → dbt_test
+      - On failure: retry once, then alert
+
+[ ] Test: docker-compose up — all services healthy
+[ ] Test: trigger DAG manually — full pipeline runs end to end
+[ ] Test: trigger DAG again — incremental load, no duplicates
+
+================================================================================
+NOTES LOG
+================================================================================
+[Add session notes here as the project progresses]
+
+2026 — Project kickoff
+  - Dataset extended to 2020-2026 (341k sales rows, 4.5k return rows)
+  - AU/NZ territories added (keys 11-15)
+  - Customer and product PKs rekeyed from 1
+  - Folder structure created
+  - Docs written: CLAUDE.md, architecture.md, business_questions.md,
+    data_dictionary.md, CLAUDE-PROGRESS.txt
+
+================================================================================
+CURRENT BLOCKERS
+================================================================================
+None
+
+================================================================================
+NEXT SESSION — START HERE
+================================================================================
+1. Read CLAUDE.md for project conventions
+2. Read this file — find first [ ] task and continue from there
+3. Update header (Last updated, Last session, Current phase) when done
+================================================================================
