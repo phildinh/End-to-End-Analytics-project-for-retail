@@ -201,6 +201,9 @@ in the dbt DAG as a dependency.
 ## 8. Orchestration
 
 **Tool:** Apache Airflow running in Docker Compose alongside PostgreSQL.
+The `postgres` service in `airflow/docker-compose.yml` is Airflow's own
+metadata database — the `adventureworks` warehouse remains on the host
+Postgres instance, reached via `host.docker.internal` (see ADR-012).
 
 **DAG:** `adventureworks_pipeline`
 
@@ -299,3 +302,8 @@ on every visual interaction — unnecessary latency with no benefit at this data
 - **Decision:** `fact_returns` groups staging rows by `(ReturnDate, TerritoryKey, ProductKey)` and sums `ReturnQuantity`, rather than passing rows through 1:1.
 - **Reason:** One combination in the source data (`2024-01-24`, territory 3, product 185) appears as two separate rows with `ReturnQuantity = 1` each, violating the documented one-row-per-grain rule. Aggregating rolls these up to a single row with `ReturnQuantity = 2`, matching the documented grain.
 - **Trade-off:** If a future incremental batch reports returns for a `(ReturnDate, TerritoryKey, ProductKey)` combination already present from an earlier batch, the new row reflects only the new batch's quantity (delete+insert replaces rather than adds). Acceptable here — return events are not expected to span batches at this grain.
+
+### ADR-012: PostgreSQL for the warehouse stays on the Windows host — not containerized
+- **Decision:** `airflow/docker-compose.yml` runs Airflow (webserver, scheduler, init) plus a `postgres` service — but that `postgres` service is Airflow's own metadata database only. The `adventureworks` warehouse database continues to run as the local Windows Postgres 16 service established in Phase 1 (see the Phase 1 note in `CLAUDE-PROGRESS.txt`). The Airflow containers reach it via `host.docker.internal`, with `DB_HOST` overridden to that value in the compose environment (all other `DB_*` vars are loaded from the project `.env` via `env_file`).
+- **Reason:** The warehouse is already built, loaded (341k+ rows), and fully tested (Phase 3, 28/28 dbt tests) against the Windows Postgres instance. Containerizing it for Phase 4 would mean standing up a second Postgres, re-running `database/01-03` DDL and the full load + dbt pipeline, and repointing `.env` — pure migration work with no benefit to the orchestration goal of this phase.
+- **Trade-off:** The stack is not fully portable via `docker-compose up` alone — a Postgres server must already exist on the host with the `adventureworks` database loaded. This is acceptable for a local portfolio project; `docs/architecture.md`'s "PostgreSQL in Docker" framing is superseded for the warehouse DB by this ADR (Airflow's own metadata DB is still containerized as designed).
