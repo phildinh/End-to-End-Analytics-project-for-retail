@@ -1,0 +1,83 @@
+version: 2
+
+models:
+  - name: dim_territory
+    description: One row per sales territory. Static, 15 rows.
+    columns:
+      - name: territory_sk
+        data_tests:
+          - unique
+          - not_null
+      - name: SalesTerritoryKey
+        quote: true
+        data_tests:
+          - unique
+          - not_null
+
+  - name: dim_customer
+    description: One row per customer version. SCD Type 2 on AnnualIncome, MaritalStatus, HomeOwner, Occupation.
+    columns:
+      - name: customer_sk
+        data_tests:
+          - unique
+          - not_null
+      - name: CustomerKey
+        quote: true
+        data_tests:
+          - not_null
+
+  - name: dim_product
+    description: One row per product version. SCD Type 2 on ProductCost, ProductPrice.
+    columns:
+      - name: product_sk
+        data_tests:
+          - unique
+          - not_null
+      - name: ProductKey
+        quote: true
+        data_tests:
+          - not_null
+
+  - name: fact_sales
+    description: One row per order line item.
+    columns:
+      - name: order_sk
+        data_tests:
+          - unique
+          - not_null
+      - name: TerritoryKey
+        quote: true
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_territory')
+              field: '"SalesTerritoryKey"'
+      - name: OrderDate
+        quote: true
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_calendar')
+              field: '"Date"'
+
+  - name: fact_returns
+    description: One row per (ReturnDate + TerritoryKey + ProductKey).
+    columns:
+      - name: return_sk
+        data_tests:
+          - unique
+          - not_null
+      - name: TerritoryKey
+        quote: true
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_territory')
+              field: '"SalesTerritoryKey"'
+      - name: ReturnDate
+        quote: true
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_calendar')
+              field: '"Date"'

@@ -2,10 +2,10 @@
 ADVENTUREWORKS ANALYTICS — PROJECT PROGRESS TRACKER
 ================================================================================
 Last updated  : 2026-06-13
-Last session  : Completed Phase 2 — wrote utils/ package and both loader
-                scripts, verified full + incremental load against the
-                "adventureworks" DB.
-Current phase : Phase 3 — dbt Models
+Last session  : Completed Phase 3 — full dbt project (staging views, SCD2
+                snapshots, seeds, mart dims/facts, dim_calendar, custom
+                tests). dbt seed/snapshot/run/test all green (28/28 tests).
+Current phase : Phase 4 — Docker + Airflow
 ================================================================================
 
 HOW TO USE THIS FILE
@@ -128,87 +128,88 @@ PHASE 2 — PYTHON LOADER
 PHASE 3 — DBT MODELS
 ================================================================================
 
-[ ] dbt/profiles.yml — PostgreSQL connection, target: dev
-[ ] dbt/dbt_project.yml — project name, model paths, materialisation defaults
-[ ] dbt/packages.yml — dbt-utils package
+[DONE] dbt/profiles.yml — PostgreSQL connection, target: dev
+[DONE] dbt/dbt_project.yml — project name, model paths, materialisation defaults
+[DONE] dbt/packages.yml — dbt-utils package
 
-[ ] dbt/macros/generate_schema_name.sql  ← CRITICAL: add before first dbt run
-[ ] dbt/macros/generate_surrogate_key.sql
+[DONE] dbt/macros/generate_schema_name.sql  ← CRITICAL: add before first dbt run
+[DONE] dbt/macros/generate_surrogate_key.sql
 
 --- STAGING MODELS (views, 1:1 with source) ---
 
-[ ] dbt/models/staging/schema.yml — sources definition pointing to staging schema
-[ ] dbt/models/staging/stg_sales.sql
+[DONE] dbt/models/staging/schema.yml — sources definition pointing to staging schema
+[DONE] dbt/models/staging/stg_sales.sql
       - Cast OrderDate, StockDate to DATE
       - Cast OrderLineItem, OrderQuantity to SMALLINT
-[ ] dbt/models/staging/stg_returns.sql
+[DONE] dbt/models/staging/stg_returns.sql
       - Cast ReturnDate to DATE
       - Cast ReturnQuantity to SMALLINT
-[ ] dbt/models/staging/stg_customer.sql
+[DONE] dbt/models/staging/stg_customer.sql
       - INITCAP on FirstName, LastName
       - LOWER + TRIM on EmailAddress
       - NULLIF on Gender, Prefix
-[ ] dbt/models/staging/stg_product.sql
+[DONE] dbt/models/staging/stg_product.sql
       - COALESCE(ProductColor, 'N/A')
       - NULLIF(ProductSize, '0') → 'N/A'
       - NULLIF(ProductStyle, '0') → 'N/A'
-[ ] dbt/models/staging/stg_territory.sql
+[DONE] dbt/models/staging/stg_territory.sql
       - Pass-through, light casting only
 
 --- SNAPSHOTS (SCD Type 2) ---
 
-[ ] dbt/snapshots/snap_customer.sql
+[DONE] dbt/snapshots/snap_customer.sql
       - strategy: check
       - unique_key: CustomerKey
       - check_cols: [AnnualIncome, MaritalStatus, HomeOwner, Occupation]
-[ ] dbt/snapshots/snap_product.sql
+[DONE] dbt/snapshots/snap_product.sql
       - strategy: check
       - unique_key: ProductKey
       - check_cols: [ProductCost, ProductPrice]
 
 --- SEEDS (static dims) ---
 
-[ ] dbt/seeds/dim_product_category.csv
-[ ] dbt/seeds/dim_product_subcategory.csv
-[ ] Run: dbt seed
+[DONE] dbt/seeds/dim_product_category.csv
+[DONE] dbt/seeds/dim_product_subcategory.csv
+[DONE] Run: dbt seed
 
 --- MART MODELS ---
 
-[ ] dbt/models/mart/schema.yml — model docs + tests
-[ ] dbt/models/mart/dim_customer.sql
+[DONE] dbt/models/mart/schema.yml — model docs + tests
+[DONE] dbt/models/mart/dim_customer.sql
       - Reads from snap_customer
       - Adds scd_is_current filter logic
-[ ] dbt/models/mart/dim_product.sql
+[DONE] dbt/models/mart/dim_product.sql
       - Reads from snap_product
       - Adds scd_is_current filter logic
-[ ] dbt/models/mart/dim_territory.sql
+[DONE] dbt/models/mart/dim_territory.sql
       - Reads from stg_territory
       - Adds territory_sk via ROW_NUMBER or IDENTITY
-[ ] dbt/models/mart/fact_sales.sql
+[DONE] dbt/models/mart/fact_sales.sql
       - materialised: incremental
       - unique_key: order_sk
       - incremental filter: loaded_at > max(loaded_at)
-      - Generates order_sk: md5(OrderNumber || OrderLineItem)
-[ ] dbt/models/mart/fact_returns.sql
+      - Generates order_sk: md5(OrderNumber || OrderLineItem || OrderDate) — ADR-010
+[DONE] dbt/models/mart/fact_returns.sql
       - materialised: incremental
       - unique_key: return_sk
       - Generates return_sk: md5(ReturnDate || TerritoryKey || ProductKey)
+      - Aggregates (sum ReturnQuantity) to grain — ADR-011
 
 --- UTILS MODELS ---
 
-[ ] dbt/models/utils/dim_calendar.sql
-      - Generate dates 2020-01-01 to 2026-12-31
+[DONE] dbt/models/utils/dim_calendar.sql
+      - Generate dates 2020-01-01 to 2027-01-01 (exclusive)
       - Columns: Date, DateKey, Year, Quarter, Month, MonthName, Week,
                  DayOfWeek, DayName, IsWeekend, MonthYear, YearMonth
 
 --- TESTS ---
 
-[ ] dbt/tests/assert_sales_keys_valid.sql
-[ ] dbt/tests/assert_no_duplicate_orders.sql
-[ ] Run: dbt test — all tests pass
+[DONE] dbt/tests/assert_sales_keys_valid.sql
+[DONE] dbt/tests/assert_no_duplicate_orders.sql
+[DONE] Run: dbt test — all tests pass (28/28)
 
 --- FULL DBT RUN ORDER ---
-[ ] dbt seed → dbt snapshot → dbt run → dbt test
+[DONE] dbt seed → dbt snapshot → dbt run → dbt test
 
 ================================================================================
 PHASE 4 — DOCKER + AIRFLOW
@@ -306,6 +307,61 @@ NOTES LOG
     load_full.py afterward to reset staging back to the clean 341,168-row
     baseline before starting Phase 3.
 
+2026-06-13 — Phase 3 (dbt Models)
+  - Wrote dbt_project.yml, profiles.yml, packages.yml (dbt-utils); installed
+    dbt-postgres + dbt-utils, confirmed `dbt debug` connects to "adventureworks".
+  - Wrote macros/generate_schema_name.sql (schema names used verbatim, no
+    target-schema prefix) and macros/generate_surrogate_key.sql
+    (md5(coalesce(cast(field as varchar),'') || '-' || ...), fields passed
+    as pre-quoted identifier strings for PascalCase columns).
+  - Staging: 5 stg_ views (stg_sales, stg_returns, stg_customer, stg_product,
+    stg_territory) + schema.yml sources block, all materialized='view' as
+    set in dbt_project.yml.
+  - Snapshots: snap_customer (18,148 rows) and snap_product (293 rows),
+    strategy='check'. unique_key and check_cols must be pre-quoted strings
+    (e.g. '"CustomerKey"') — dbt's snapshot macro doesn't auto-quote mixed-
+    case Postgres identifiers.
+  - Seeds: dim_product_category (4 rows), dim_product_subcategory (37 rows)
+    loaded via `dbt seed`.
+  - Mart: dim_territory (15 rows, +lat/long via hardcoded VALUES CTE),
+    dim_customer / dim_product (from snapshots, SCD2 columns +
+    customer_sk/product_sk via row_number()), fact_sales (incremental,
+    341,168 rows), fact_returns (incremental, 4,496 rows after aggregation).
+  - utils/dim_calendar — date_spine 2020-01-01 to 2027-01-01 (exclusive),
+    full calendar attribute set.
+  - Custom tests: assert_sales_keys_valid (fact_sales.CustomerKey/ProductKey
+    must match a scd_is_current row in dim_customer/dim_product — SCD2 dims
+    can't be DB FK targets, see ADR-008), assert_no_duplicate_orders
+    (fact_sales must be unique per OrderNumber+OrderLineItem+OrderDate).
+
+  ARCHITECTURAL CHANGES (see ADR-009/010/011 in docs/architecture.md):
+  - ADR-009: dbt now fully owns the mart schema. Dropped 6 leftover FK
+    constraints from 03_constraints_indexes.sql that targeted dbt-managed
+    mart tables (fk_subcategory_category, fk_product_subcategory,
+    fk_sales_territory, fk_sales_calendar, fk_returns_territory,
+    fk_returns_calendar) — `dbt seed` can't TRUNCATE a table referenced by
+    an FK, and `dbt run`'s table rebuild (create-temp -> rename-old-to-backup
+    -> create-new -> drop-backup) fails if another table FKs the backup.
+    Also switched dim_territory/dim_customer/dim_product surrogate keys from
+    `INT GENERATED ALWAYS AS IDENTITY` to `row_number()` in the model SQL,
+    since CTAS doesn't preserve IDENTITY. database/03_constraints_indexes.sql
+    is now a historical record only, not re-runnable as-is. CLAUDE.md and
+    docs/architecture.md Section 5 updated to match.
+  - ADR-010: fact_sales surrogate key changed to
+    md5(OrderNumber || OrderLineItem || OrderDate) — found 242
+    (OrderNumber, OrderLineItem) pairs reused across different OrderDates
+    in the 2020-2026 extended dataset (0 collisions once OrderDate added
+    across all 341,168 rows). CLAUDE.md grain table and
+    docs/data_dictionary.md updated to match.
+  - ADR-011: fact_returns now aggregates source rows by
+    (ReturnDate, TerritoryKey, ProductKey), summing ReturnQuantity — found
+    1 duplicate combo (2024-01-24, territory 3, product 185) with two rows
+    of ReturnQuantity=1 each. docs/data_dictionary.md updated to note this.
+
+  RESULT: `dbt seed && dbt snapshot && dbt run && dbt test` fully green —
+  2 seeds, 2 snapshots, 11 models (5 views, 4 tables, 2 incremental),
+  28/28 tests PASS.
+
 ================================================================================
 CURRENT BLOCKERS
 ================================================================================
@@ -315,6 +371,7 @@ None
 NEXT SESSION — START HERE
 ================================================================================
 1. Read CLAUDE.md for project conventions
-2. Read this file — find first [ ] task and continue from there
+2. Read this file — Phase 3 complete, start Phase 4 (Docker + Airflow):
+   first task is airflow/Dockerfile
 3. Update header (Last updated, Last session, Current phase) when done
 ================================================================================

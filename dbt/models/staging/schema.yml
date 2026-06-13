@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: staging
+    schema: staging
+    tables:
+      - name: fact_sales
+      - name: fact_returns
+      - name: dim_customer
+      - name: dim_product
+      - name: dim_territory

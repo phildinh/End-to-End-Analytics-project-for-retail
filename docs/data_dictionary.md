@@ -31,13 +31,13 @@ metadata columns (`loaded_at`, `batch_id`) and no surrogate keys or SCD columns.
 
 **Description:** One row per order line item. The primary transactional fact table
 capturing all sales across all territories from 2020 to 2026.  
-**Grain:** One row per (OrderNumber + OrderLineItem)  
+**Grain:** One row per (OrderNumber + OrderLineItem + OrderDate)  
 **Load strategy:** Incremental — append new rows where `loaded_at > last watermark`  
-**Surrogate key:** `md5(OrderNumber || OrderLineItem)`
+**Surrogate key:** `md5(OrderNumber || OrderLineItem || OrderDate)`
 
 | Column | Data Type | Nullable | Description |
 |---|---|---|---|
-| `order_sk` | CHAR(32) | NOT NULL | Surrogate PK — md5 hash of OrderNumber + OrderLineItem |
+| `order_sk` | CHAR(32) | NOT NULL | Surrogate PK — md5 hash of OrderNumber + OrderLineItem + OrderDate |
 | `OrderDate` | DATE | NOT NULL | Date the order was placed |
 | `StockDate` | DATE | NOT NULL | Date stock was allocated for this order |
 | `OrderNumber` | VARCHAR(20) | NOT NULL | Natural order identifier from source (e.g. SO48797) |
@@ -52,6 +52,7 @@ capturing all sales across all territories from 2020 to 2026.
 **Notes:**
 - Revenue and profit are not stored — calculated in DAX as `OrderQuantity × ProductPrice` and `OrderQuantity × (ProductPrice − ProductCost)` using `dim_product` values
 - ProductPrice and ProductCost join from `dim_product` — SCD2 ensures the historically correct price is used for each order date
+- `OrderDate` is part of the surrogate key because the source data reuses 242 `(OrderNumber, OrderLineItem)` pairs across different `OrderDate` values — see ADR-010 in `docs/architecture.md`
 
 ---
 
@@ -76,6 +77,7 @@ Captures all product returns across all territories from 2020 to 2026.
 **Notes:**
 - No CustomerKey — returns are not linked to specific customers in the source data
 - Return Rate = `fact_returns[ReturnQuantity]` / `fact_sales[Total Orders]` — requires both facts in the Power BI model
+- Rows sharing a `(ReturnDate, TerritoryKey, ProductKey)` combination in the source data are aggregated (`ReturnQuantity` summed) to match this grain — see ADR-011 in `docs/architecture.md`
 
 ---
 
