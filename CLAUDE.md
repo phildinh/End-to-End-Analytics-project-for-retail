@@ -152,6 +152,20 @@ adventureworks-analytics/
 
 ---
 
+## Git Workflow
+
+- One feature branch + one PR per phase (e.g. `phase-3-dbt-models`).
+- At the end of a phase, once all its tasks are marked `[DONE]` in
+  `CLAUDE-PROGRESS.txt`: commit the changes, push the branch to `origin`, and
+  open a PR against `main` summarising what was built and verified.
+- Wait for the user to merge the PR before branching off `main` for the next
+  phase.
+- This is pre-authorized — commit/push/PR for phase wrap-up does not require
+  asking first. Still ask before any destructive git operation (force-push,
+  reset --hard, branch deletion, etc).
+
+---
+
 ## Do Not
 
 - Do not add medallion/bronze/silver layer — two schemas only

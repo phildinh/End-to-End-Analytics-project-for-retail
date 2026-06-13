@@ -1,0 +1,29 @@
+# Environment / secrets
+.env
+
+# Claude Code — personal/local settings
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+logs/*.log
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# Generated test data
+data/test/
+
+# Airflow
+airflow/logs/
+
+# OS
+.DS_Store
+Thumbs.db
