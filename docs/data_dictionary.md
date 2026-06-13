@@ -266,6 +266,33 @@ They are never queried by Power BI directly.
 
 ---
 
+### `staging.etl_log`
+
+**Description:** ETL run log — one row per table per pipeline run (full,
+incremental, or dims). Written by `load_full.py` / `load_incremental.py` /
+`load_dims.py` via `utils/etl_log.py`. Gives a queryable history of what
+loaded, how many rows, and when.
+
+| Column | Data Type | Nullable | Description |
+|---|---|---|---|
+| `log_id` | SERIAL | NOT NULL | PK — auto-incrementing |
+| `batch_id` | VARCHAR(50) | NOT NULL | Pipeline run identifier (YYYYMMDD_HHmmss) |
+| `load_type` | VARCHAR(20) | NOT NULL | `full`, `incremental`, or `dims` |
+| `table_name` | VARCHAR(50) | NOT NULL | Staging table loaded (e.g. `fact_sales`) |
+| `source_file` | VARCHAR(255) | NOT NULL | Path to the source CSV for this load |
+| `row_count` | INT | NOT NULL | Rows loaded into the staging table |
+| `started_at` | TIMESTAMP | NOT NULL | When the table load started |
+| `finished_at` | TIMESTAMP | NOT NULL | When the table load finished |
+| `status` | VARCHAR(20) | NOT NULL | `success` or `failed` |
+| `message` | VARCHAR(500) | NULL | Optional detail (e.g. error message) |
+
+**Notes:**
+- Not a dbt source — this table is for pipeline monitoring only, not part of the star schema
+- Query recent runs: `SELECT * FROM staging.etl_log ORDER BY started_at DESC;`
+- The same run also logs a per-table row count summary to `logs/pipeline_YYYYMMDD.log`
+
+---
+
 ## Source to Mart Column Mapping
 
 ### fact_sales
