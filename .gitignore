@@ -17,6 +17,7 @@ logs/*.log
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+dbt/.user.yml
 
 # Generated test data
 data/test/

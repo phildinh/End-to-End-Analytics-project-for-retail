@@ -77,7 +77,7 @@ adventureworks-analytics/
 - Staging models: always `materialized='view'`
 - Mart models: always `materialized='table'` or `materialized='incremental'`
 - Fact tables: hash surrogate key `md5(cast(natural_key as varchar))`
-- Dim tables: integer identity surrogate key
+- Dim tables: integer surrogate key, generated via `row_number()` in mart models (see ADR-009)
 - SCD Type 2: use `dbt snapshot` — never manually manage history in mart models
 - Static dims (<50 rows): live in `dbt/seeds/`, loaded via `dbt seed`
 - Always use `{{ ref() }}` — never hardcode schema names
@@ -97,7 +97,7 @@ adventureworks-analytics/
 - Two schemas only: `staging` and `mart`
 - Python → `staging` only. dbt → `mart` only. Never cross these.
 - Fact surrogate keys: `CHAR(32)` (md5 hash)
-- Dim surrogate keys: `INT GENERATED ALWAYS AS IDENTITY`
+- Dim surrogate keys: `INT`, generated via `row_number()` in dbt mart models (see ADR-009)
 - Every fact table has: surrogate PK, `loaded_at TIMESTAMP`, `batch_id VARCHAR(50)`
 - Every SCD2 dim has: `scd_start_date`, `scd_end_date`, `scd_is_current`, `scd_version`
 
@@ -114,7 +114,7 @@ adventureworks-analytics/
 
 | Table | Grain | Surrogate Key |
 |---|---|---|
-| `fact_sales` | One row per order line item | `md5(OrderNumber + OrderLineItem)` |
+| `fact_sales` | One row per order line item | `md5(OrderNumber + OrderLineItem + OrderDate)` (see ADR-010) |
 | `fact_returns` | One row per (ReturnDate + TerritoryKey + ProductKey) | `md5(ReturnDate + TerritoryKey + ProductKey)` |
 | `dim_customer` | One current row per customer (SCD2 adds versions) | INT IDENTITY |
 | `dim_product` | One current row per product (SCD2 adds versions) | INT IDENTITY |

@@ -149,15 +149,17 @@ Reporting a product under two names because of a typo fix would create confusion
 | Table Type | Key Type | Generation Method |
 |---|---|---|
 | Fact tables | `CHAR(32)` | `md5(natural key columns concatenated)` |
-| Dimension tables | `INT GENERATED ALWAYS AS IDENTITY` | PostgreSQL identity column |
+| Dimension tables | `INT` | `row_number()` generated in the dbt mart model (see ADR-009) |
 
 **Why md5 for facts:** Deterministic — the same source row always produces the same
 surrogate key. This makes incremental loads idempotent. Re-running a failed batch
 produces no duplicates because the key already exists in the mart.
 
-**Why integer identity for dims:** Dims are managed by `dbt snapshot` which controls
-inserts. Sequential integers are readable, join-efficient in VertiPaq, and the
-non-determinism issue doesn't apply because dbt handles the versioning logic.
+**Why row_number() for dims:** Dims are rebuilt by `dbt run` from `dbt snapshot` output,
+which controls insert order. Sequential integers are readable and join-efficient in
+VertiPaq. `CREATE TABLE AS SELECT` does not preserve `GENERATED ALWAYS AS IDENTITY`
+(see ADR-009), so `row_number()` is the deterministic equivalent for a table that is
+fully rebuilt on every run.
 
 ---
 
@@ -279,3 +281,21 @@ on every visual interaction — unnecessary latency with no benefit at this data
 - **Decision:** `03_constraints_indexes.sql` does not add FK constraints from `fact_sales`/`fact_returns` to `dim_customer.CustomerKey` or `dim_product.ProductKey`.
 - **Reason:** `dim_customer` and `dim_product` are SCD Type 2 — `CustomerKey`/`ProductKey` are not unique across historical versions, so they cannot be FK targets. Enforceable FKs were added instead for relationships with genuinely unique natural keys: `dim_product_subcategory → dim_product_category`, `dim_product → dim_product_subcategory`, `fact_* .TerritoryKey → dim_territory`, `fact_*.OrderDate/ReturnDate → dim_calendar`.
 - **Trade-off:** Referential integrity for `fact_* → dim_customer/dim_product` is validated via dbt `relationships` schema tests (filtered to `scd_is_current = TRUE`) in Phase 3, not by the database.
+
+### ADR-009: dbt fully owns the mart schema — remaining Phase 1 constraints dropped
+- **Decision:** During Phase 3, the remaining PK/FK constraints from `03_constraints_indexes.sql` that target dbt-managed mart tables were dropped from the live database: `fk_subcategory_category` (`dim_product_subcategory` → `dim_product_category`), `fk_product_subcategory` (`dim_product` → `dim_product_subcategory`), `fk_sales_territory`, `fk_sales_calendar`, `fk_returns_territory`, `fk_returns_calendar`. Integer surrogate keys (`territory_sk`, `customer_sk`, `product_sk`) are generated with `row_number()` in the model SQL rather than relying on the `INT GENERATED ALWAYS AS IDENTITY` columns from `02_create_mart_schema.sql`.
+- **Reason:**
+  - `dbt seed` truncates and reloads seed tables on every run. `dim_product_subcategory` had an FK to `dim_product_category`, which Postgres refuses to truncate without `CASCADE` — `dbt seed` failed immediately.
+  - `dbt run` table materialization rebuilds a table via create-temp → rename-old-to-backup → create-new → drop-backup. The drop-backup step fails if another table holds an FK pointing at it. `fact_sales`/`fact_returns` had FKs to `dim_territory` and `dim_calendar`, both table-materialized — every rebuild after the first would fail.
+  - `CREATE TABLE AS SELECT` does not carry over `GENERATED ALWAYS AS IDENTITY`, so Phase 1's identity columns on `dim_territory`/`dim_customer`/`dim_product` would have been silently lost on the first `dbt run` regardless.
+- **Trade-off:** No database-level referential integrity for these six relationships. All are validated via dbt tests instead: `relationships` schema tests for `fact_* .TerritoryKey → dim_territory.SalesTerritoryKey` and `fact_*.OrderDate/ReturnDate → dim_calendar.Date`, plus the custom `assert_sales_keys_valid` test for `fact_sales.CustomerKey/ProductKey → dim_customer/dim_product` (filtered to `scd_is_current`). This extends ADR-008's reasoning — dbt-managed mart tables are validated by dbt tests, not Postgres constraints — to the whole mart schema. `database/03_constraints_indexes.sql` remains as a record of the originally intended design but is no longer runnable as-is against a dbt-managed mart.
+
+### ADR-010: fact_sales surrogate key includes OrderDate
+- **Decision:** `order_sk = md5(OrderNumber || OrderLineItem || OrderDate)`, not `md5(OrderNumber || OrderLineItem)` as originally specified in the data dictionary.
+- **Reason:** The source data (extended to span 2020–2026) contains 242 `(OrderNumber, OrderLineItem)` pairs that recur with different `OrderDate`/`ProductKey`/`CustomerKey` values — `OrderNumber` is reused across the extended date range. Adding `OrderDate` to the key produces zero collisions across all 341,168 rows.
+- **Trade-off:** None observed — `OrderDate` is immutable per row, so the key stays deterministic and idempotent for incremental loads.
+
+### ADR-011: fact_returns aggregates to its documented grain
+- **Decision:** `fact_returns` groups staging rows by `(ReturnDate, TerritoryKey, ProductKey)` and sums `ReturnQuantity`, rather than passing rows through 1:1.
+- **Reason:** One combination in the source data (`2024-01-24`, territory 3, product 185) appears as two separate rows with `ReturnQuantity = 1` each, violating the documented one-row-per-grain rule. Aggregating rolls these up to a single row with `ReturnQuantity = 2`, matching the documented grain.
+- **Trade-off:** If a future incremental batch reports returns for a `(ReturnDate, TerritoryKey, ProductKey)` combination already present from an earlier batch, the new row reflects only the new batch's quantity (delete+insert replaces rather than adds). Acceptable here — return events are not expected to span batches at this grain.
