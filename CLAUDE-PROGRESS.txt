@@ -2,10 +2,11 @@
 ADVENTUREWORKS ANALYTICS — PROJECT PROGRESS TRACKER
 ================================================================================
 Last updated  : 2026-06-13
-Last session  : Completed Phase 3 — full dbt project (staging views, SCD2
-                snapshots, seeds, mart dims/facts, dim_calendar, custom
-                tests). dbt seed/snapshot/run/test all green (28/28 tests).
-Current phase : Phase 4 — Docker + Airflow
+Last session  : Completed Phase 4 — Airflow running in Docker, connecting to
+                the host "adventureworks" warehouse DB (ADR-012). DAG
+                adventureworks_pipeline triggered twice; both runs succeeded
+                end to end with 28/28 dbt tests passing.
+Current phase : Phase 5 — Power BI
 ================================================================================
 
 HOW TO USE THIS FILE
@@ -215,29 +216,44 @@ PHASE 3 — DBT MODELS
 PHASE 4 — DOCKER + AIRFLOW
 ================================================================================
 
-[ ] airflow/Dockerfile
-      - Base: apache/airflow:2.x
-      - Install dbt-postgres + project requirements
+[DONE] airflow/Dockerfile
+      - Base: apache/airflow:2.9.3-python3.11
+      - Installs git (required by dbt deps) + project requirements
 
-[ ] airflow/docker-compose.yml
-      - Services: postgres, airflow-webserver, airflow-scheduler
-      - Volumes: mount /data, /dbt, /loader, /utils
+[DONE] airflow/docker-compose.yml
+      - Services: postgres (Airflow metadata DB only — see ADR-012),
+        airflow-init, airflow-webserver, airflow-scheduler
+      - Volumes: mount ../dbt, ../data, ../loader, ../utils, ../logs,
+        ./dags, ./logs into /opt/airflow/project/*
+      - DB_HOST overridden to host.docker.internal so containers reach
+        the Windows-host "adventureworks" warehouse DB
 
-[ ] airflow/requirements.txt
-      - dbt-postgres
+[DONE] airflow/requirements.txt
+      - dbt-core==1.8.8 (pinned — see note below)
+      - dbt-postgres==1.8.2
       - psycopg2-binary
       - sqlalchemy
       - python-dotenv
 
-[ ] airflow/dags/adventureworks_pipeline.py
+[DONE] airflow/dags/adventureworks_pipeline.py
       - Schedule: @daily, catchup=False
       - Tasks in order:
           load_to_staging → dbt_seed → dbt_snapshot → dbt_run → dbt_test
-      - On failure: retry once, then alert
+      - On failure: retry once (5 min delay), then alert
 
-[ ] Test: docker-compose up — all services healthy
-[ ] Test: trigger DAG manually — full pipeline runs end to end
-[ ] Test: trigger DAG again — incremental load, no duplicates
+[DONE] Test: docker-compose up — all services healthy
+      - postgres, airflow-init, airflow-webserver, airflow-scheduler all
+        came up healthy after two fixes (see notes below)
+
+[DONE] Test: trigger DAG manually — full pipeline runs end to end
+      - manual__2026-06-13T05:51:42+00:00 — all 5 tasks success
+
+[DONE] Test: trigger DAG again — incremental load, no duplicates
+      - scheduled__2026-06-12T00:00:00+00:00 (auto-fired on unpause) —
+        all 5 tasks success. mart row counts unchanged across both runs
+        (fact_sales 341168, fact_returns 4496) and 28/28 dbt tests pass
+        on both — confirms delete+insert by md5 surrogate key is
+        idempotent.
 
 ================================================================================
 NOTES LOG
@@ -362,16 +378,121 @@ NOTES LOG
   2 seeds, 2 snapshots, 11 models (5 views, 4 tables, 2 incremental),
   28/28 tests PASS.
 
+2026-06-13 — Phase 4 (Docker + Airflow)
+  - Wrote airflow/requirements.txt (dbt-core==1.8.8 pinned, dbt-postgres==1.8.2,
+    psycopg2-binary, sqlalchemy, python-dotenv), airflow/Dockerfile (apache/
+    airflow:2.9.3-python3.11 + git installed for dbt package deps),
+    airflow/docker-compose.yml (postgres + airflow-init + airflow-webserver +
+    airflow-scheduler via x-airflow-common anchor), and
+    airflow/dags/adventureworks_pipeline.py (load_to_staging -> dbt_seed ->
+    dbt_snapshot -> dbt_run -> dbt_test, @daily, catchup=False, retries=1).
+
+  ARCHITECTURAL DECISION (see ADR-012 in docs/architecture.md):
+  - The "adventureworks" warehouse DB stays on the local Windows Postgres 16
+    instance (already loaded/tested in Phases 1-3) rather than being
+    containerized. Airflow containers reach it via host.docker.internal,
+    with DB_HOST overridden in docker-compose's environment (other DB_* vars
+    come from ../.env via env_file). The docker-compose `postgres` service is
+    Airflow's own metadata DB only.
+
+  FIXES DURING docker-compose up / dbt debug:
+  - pip resolved dbt-postgres==1.8.2's unconstrained dbt-core dependency to a
+    pre-release 2.0.0a1, which can't parse profiles.yml correctly
+    ("password: invalid type: integer"). Fixed by pinning dbt-core==1.8.8.
+  - `dbt debug` failed the git dependency check (git not installed in the
+    apache/airflow base image). Fixed by adding a `USER root` apt-get install
+    git step to the Dockerfile before switching back to `USER airflow`.
+  - load_to_staging failed with PermissionError on os.makedirs("/opt/airflow/
+    project/logs") — that path wasn't a real mount, just an implicit
+    (root-owned) directory created by Docker for the sibling mounts. Fixed by
+    adding an explicit `../logs:/opt/airflow/project/logs` volume mount.
+
+  TEST RESULTS:
+  - docker-compose up: postgres, airflow-init, airflow-webserver,
+    airflow-scheduler all healthy; `airflow dags list` shows
+    adventureworks_pipeline with no import errors.
+  - Unpausing the DAG fired two runs (a manual trigger plus an auto-scheduled
+    run for the prior day, since catchup=False only skips runs before
+    start_date). Both completed with all 5 tasks `success`.
+  - dbt_run reported "INSERT 0 0" on both runs: load_incremental.py's
+    default (no --file) re-appends the full historical CSVs, and the
+    container's UTC clock produced a loaded_at older (numerically) than the
+    naive +10-offset loaded_at already in mart from the Phase 3 host run —
+    so the `loaded_at > max(loaded_at)` incremental filter matched nothing.
+    mart row counts stayed at fact_sales=341168 / fact_returns=4496 across
+    both runs (28/28 dbt tests pass both times) — confirms re-running the
+    DAG produces no duplicates.
+  - Cleanup: staging.fact_sales/fact_returns had accumulated multiple
+    duplicate full-CSV batches from repeated test runs (this session and
+    earlier). Re-ran load_full.py (truncate+reload) then `dbt run` from the
+    host to reset staging to one clean batch; dbt run replaced all 341168 /
+    4496 mart rows via delete+insert (INSERT 0 341168 / INSERT 0 4496) and
+    28/28 tests still pass — confirms the reset was idempotent at the mart
+    layer.
+
+  KNOWN LIMITATION (not fixed — out of scope for Phase 4):
+  - load_incremental.py's default behaviour (no --file) re-appends the
+    entire historical CSV every run, so staging.fact_sales/fact_returns grow
+    by a full duplicate batch on every nightly run. mart stays correct
+    (delete+insert by deterministic md5 key), but staging will accumulate
+    unbounded duplicates over time. Revisit in a future phase: either point
+    the nightly DAG at a true daily-delta file, or have load_incremental.py
+    deduplicate/prune superseded batches in staging.
+
 ================================================================================
 CURRENT BLOCKERS
 ================================================================================
 None
 
 ================================================================================
+PHASE 5 — POWER BI
+================================================================================
+
+[ ] Connect Power BI Desktop to mart schema (Import mode)
+      - Import fact_sales, fact_returns + all 6 dims
+      - Set relationships: all many-to-one, single filter direction
+        (dim -> fact), conformed dims (dim_product, dim_territory,
+        dim_calendar) shared across both facts
+
+[ ] Build `_Measures` table (no columns, DAX measures only)
+      - Total Revenue, Total Profit, Total Orders, Return Rate %
+      - Monthly Revenue trend, MoM Revenue Δ, MoM Orders Δ
+      - Revenue per Customer, Adjusted Profit
+      - See docs/business_questions.md "Key Metrics" for definitions
+
+[ ] Page 1 — Executive Summary
+      - KPI cards: Total Revenue, Total Profit, Total Orders, Return Rate %
+      - Revenue trend line + MoM cards
+      - Orders by Category bar chart + Top 10 Products table
+        (Orders / Revenue / Return %)
+
+[ ] Page 2 — Regional Map
+      - Bubble map: Orders and Revenue by Country/Continent
+      - Continent filter slicer
+
+[ ] Page 3 — Product Detail (drill-through from Top 10 table)
+      - Monthly Orders / Revenue / Profit vs Target
+      - Total Profit vs Adjusted Profit (price adjustment %)
+
+[ ] Page 4 — Customer Detail
+      - KPI cards: Unique Customers, Revenue per Customer
+      - Trend line, donut charts (income level, occupation)
+      - Top 100 customers table
+
+[ ] Row Level Security (dim_territory[Continent], dim_territory[Country])
+      - Role "Pacific" — Australia, New Zealand only
+      - Role "Europe" — UK, France, Germany, Poland only
+      - Role "North America" — US, Canada only
+      - Document in powerbi/rls_setup.md
+
+[ ] Document all measures in powerbi/dax_measures.md
+[ ] Publish to Power BI Service, apply RLS roles, test each role's view
+
+================================================================================
 NEXT SESSION — START HERE
 ================================================================================
 1. Read CLAUDE.md for project conventions
-2. Read this file — Phase 3 complete, start Phase 4 (Docker + Airflow):
-   first task is airflow/Dockerfile
+2. Read this file — Phase 4 complete, start Phase 5 (Power BI):
+   first task is connecting Power BI Desktop to the mart schema (Import mode)
 3. Update header (Last updated, Last session, Current phase) when done
 ================================================================================
