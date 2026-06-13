@@ -32,7 +32,7 @@ Two schemas: `staging` (raw land) → `mart` (star schema). Power BI connects to
 | Layer | Tool |
 |---|---|
 | Source | CSV files in `/data/` |
-| Database | PostgreSQL 15 (local via Docker) |
+| Database | PostgreSQL 16 (local Windows service — see ADR-012; Airflow's own metadata DB is Dockerized) |
 | Transformation | dbt (staging views → mart tables + snapshots) |
 | Orchestration | Apache Airflow + Docker Compose |
 | Visualisation | Power BI Desktop → Power BI Service |
