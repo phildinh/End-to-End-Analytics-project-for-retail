@@ -1,9 +1,11 @@
 ================================================================================
 ADVENTUREWORKS ANALYTICS — PROJECT PROGRESS TRACKER
 ================================================================================
-Last updated  : [UPDATE THIS EACH SESSION]
-Last session  : [BRIEF NOTE — e.g. "Completed staging DDL, started mart DDL"]
-Current phase : [UPDATE THIS — e.g. "Phase 1 — Database Design"]
+Last updated  : 2026-06-13
+Last session  : Completed Phase 2 — wrote utils/ package and both loader
+                scripts, verified full + incremental load against the
+                "adventureworks" DB.
+Current phase : Phase 3 — dbt Models
 ================================================================================
 
 HOW TO USE THIS FILE
@@ -29,26 +31,27 @@ PHASE 0 — PROJECT SETUP
 [DONE] Write docs/architecture.md
 [DONE] Write docs/business_questions.md
 [DONE] Write docs/data_dictionary.md
-[ ] Write README.md
-[ ] Add generate_schema_name.sql to dbt/macros/
-[ ] Copy final CSVs to /data/ folder
-[ ] Copy dim_product_category.csv and dim_product_subcategory.csv to dbt/seeds/
+[DONE] Write README.md
+[DONE] Add generate_schema_name.sql to dbt/macros/
+[DONE] Copy final CSVs to /data/ folder
+[DONE] Copy dim_product_category.csv and dim_product_subcategory.csv to dbt/seeds/
 
 ================================================================================
 PHASE 1 — DATABASE DESIGN & DDL
 ================================================================================
 
-[ ] 01_create_staging_schema.sql
+[DONE] 01_create_staging_schema.sql
       - staging.fact_sales
       - staging.fact_returns
       - staging.dim_customer
       - staging.dim_product
       - staging.dim_territory
-      - staging.dim_calendar
       NOTE: All staging tables include loaded_at TIMESTAMP + batch_id VARCHAR(50)
       NOTE: No surrogate keys in staging — natural keys only
+      NOTE: staging.dim_calendar dropped — see ADR-007 (dim_calendar is fully
+            dbt-generated, not source-conformed)
 
-[ ] 02_create_mart_schema.sql
+[DONE] 02_create_mart_schema.sql
       - mart.fact_sales         (order_sk CHAR(32) PK — md5)
       - mart.fact_returns       (return_sk CHAR(32) PK — md5)
       - mart.dim_customer       (customer_sk INT IDENTITY — SCD2 columns)
@@ -59,59 +62,67 @@ PHASE 1 — DATABASE DESIGN & DDL
       - mart.dim_product_category     (loaded via dbt seed)
       NOTE: SCD2 columns — scd_start_date, scd_end_date, scd_is_current, scd_version
 
-[ ] 03_constraints_indexes.sql
+[DONE] 03_constraints_indexes.sql
       - Primary key constraints
-      - Foreign key constraints (fact → dim)
+      - Foreign key constraints (fact → dim) — added where natural key is
+        unique (no SCD); fact -> dim_customer/dim_product validated via dbt
+        relationships tests instead — see ADR-008
       - Indexes on FK columns for join performance
       - Index on loaded_at for incremental watermark queries
 
-[ ] Verify DDL — run all 3 scripts in order, confirm schemas and tables created
-[ ] Document any DDL decisions in docs/architecture.md ADR section
+[DONE] Verify DDL — run all 3 scripts in order, confirm schemas and tables created
+[DONE] Document any DDL decisions in docs/architecture.md ADR section (ADR-007, ADR-008)
 
 ================================================================================
 PHASE 2 — PYTHON LOADER
 ================================================================================
 
-[ ] utils/logger.py
+[DONE] utils/logger.py
       - Rotating log handler
       - Writes to /logs/pipeline_YYYYMMDD.log
       - Format: timestamp | level | message
 
-[ ] utils/db_connection.py
+[DONE] utils/db_connection.py
       - SQLAlchemy engine from .env
       - Connection string: postgresql://user:pass@localhost:5432/adventureworks
       - Returns engine object — imported by all loader scripts
 
-[ ] utils/file_utils.py
+[DONE] utils/file_utils.py
       - read_csv(filepath) — reads with latin-1 encoding, dayfirst=True
       - generate_batch_id() — returns YYYYMMDD_HHmmss string
       - validate_file_exists(filepath) — raises FileNotFoundError if missing
       - __init__.py — exports all three utils
 
-[ ] loader/load_full.py
+[DONE] loader/load_full.py
       - Reads all CSVs from /data/
       - Adds loaded_at = datetime.now() (once per batch)
       - Adds batch_id = generate_batch_id() (once per batch)
       - Truncates staging tables before load (full load = clean slate)
       - Loads to staging schema
       - Logs row counts per table
-      - Triggers dbt run on completion
+      - Triggers dbt run on completion (logs + continues if dbt not found —
+        dbt project isn't runnable until Phase 3)
 
-[ ] loader/load_incremental.py
-      - Reads CSVs from /data/
+[DONE] loader/load_incremental.py
+      - Reads CSVs from /data/ (fact_sales, fact_returns)
       - Adds loaded_at + batch_id
       - Appends only — no truncate
       - dbt handles deduplication via surrogate key
       - Logs new row counts per table
+      - --file / --table flags for loading a single test batch CSV
 
-[ ] .env file
+[DONE] .env file
       - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
       - DATA_PATH=./data
 
-[ ] .env.example — placeholder values, safe to commit
+[DONE] .env.example — placeholder values, safe to commit
 
-[ ] Test full load — verify row counts match source CSVs
-[ ] Test incremental load — verify no duplicates after re-run
+[DONE] Test full load — verify row counts match source CSVs
+[DONE] Test incremental load — verify no duplicates after re-run
+      NOTE: "no duplicates" verified at the staging layer means staging
+      correctly accumulates one row per append (no loader-side dedup —
+      by design). True dedup on order_sk happens in the Phase 3 dbt
+      incremental model; re-test end-to-end once that exists.
 
 ================================================================================
 PHASE 3 — DBT MODELS
@@ -239,6 +250,61 @@ NOTES LOG
   - Folder structure created
   - Docs written: CLAUDE.md, architecture.md, business_questions.md,
     data_dictionary.md, CLAUDE-PROGRESS.txt
+
+2026-06-13 — Phase 0 close-out + Phase 1 (Database DDL)
+  - README.md written; dim_product_category.csv / dim_product_subcategory.csv
+    copied from data/ into dbt/seeds/
+  - .gitignore added (was empty/tracked) — excludes .env, logs, dbt artifacts,
+    data/test/. .env untracked from git (git rm --cached) before adding real
+    credentials, to avoid committing secrets.
+  - .env populated with local Postgres 16 connection details (DB_HOST=localhost,
+    DB_PORT=5432, DB_NAME=adventureworks, DB_USER=postgres). .env.example has
+    placeholder password.
+  - DEV DB: using the existing local Windows Postgres 16 service (port 5432,
+    db "adventureworks") rather than the Dockerized Postgres 15 in
+    architecture.md, since Docker Desktop wasn't running. Functionally
+    equivalent for this project; revisit if Phase 4 Docker Compose needs its
+    own Postgres service.
+  - Wrote and ran database/01_create_staging_schema.sql (5 staging tables,
+    no staging.dim_calendar — ADR-007), 02_create_mart_schema.sql (8 mart
+    tables), 03_constraints_indexes.sql (PKs, FKs where natural keys are
+    unique, indexes — ADR-008 documents why fact->dim_customer/dim_product
+    have no FK). All 3 verified against "adventureworks" DB — schemas and
+    tables created successfully.
+
+2026-06-13 — Phase 2 (Python Loader)
+  - Added requirements.txt (pandas, sqlalchemy, psycopg2-binary, python-dotenv)
+    and installed sqlalchemy + psycopg2-binary into the active environment.
+  - Wrote utils/logger.py (get_logger — writes to logs/pipeline_YYYYMMDD.log,
+    format "timestamp | level | message"), utils/db_connection.py (get_engine
+    — SQLAlchemy engine from .env), utils/file_utils.py (read_csv with
+    latin-1 + dayfirst, generate_batch_id, validate_file_exists), and
+    utils/__init__.py exporting all three.
+  - Wrote loader/load_full.py — truncates + reloads all 5 staging tables from
+    /data/ (fact_sales_2020_2026.csv, fact_returns_2020_2026.csv, and the 3
+    Lookup CSVs), sets loaded_at/batch_id once per batch, then attempts
+    `dbt run` (logs an error and continues if dbt isn't available — expected
+    until Phase 3).
+  - Wrote loader/load_incremental.py — appends to staging.fact_sales /
+    staging.fact_returns only (no truncate), supports --file/--table to load
+    a single test batch CSV, then attempts `dbt run`.
+  - Both loader scripts insert the project root onto sys.path so
+    `python loader/load_full.py` / `load_incremental.py` work when invoked
+    directly from the repo root (utils package otherwise not importable).
+  - Fixed a pre-existing bug in utils/test/generate_test_incremental.py and
+    utils/test/generate_test_failures.py: fmt_date used "%-d/%m/%Y" (glibc-only
+    strftime), which crashes on Windows. Changed to "%d/%m/%Y" (zero-padded
+    day) — still parses correctly with dayfirst=True.
+  - Verified full load: row counts match source exactly (fact_sales 341,168;
+    fact_returns 4,497; dim_customer 18,148; dim_product 293; dim_territory
+    15). Spot-checked date parsing (29/01/2020 -> 2020-01-29) and nullable
+    columns (Prefix/Gender empty strings correctly landed as NULL, not '').
+  - Verified incremental load: ran generate_test_incremental.py, loaded the
+    163-row "today" batch via --file, then re-loaded the identical duplicate
+    file. Staging correctly accumulated 341,168 + 163 + 163 = 341,494 rows
+    across 3 distinct batch_ids — confirms append-only behaviour. Re-ran
+    load_full.py afterward to reset staging back to the clean 341,168-row
+    baseline before starting Phase 3.
 
 ================================================================================
 CURRENT BLOCKERS

@@ -89,8 +89,8 @@ SO_START = 300000
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def fmt_date(d):
-    """Format date as D/MM/YYYY — matches source CSV convention."""
-    return d.strftime("%-d/%m/%Y")
+    """Format date as DD/MM/YYYY — matches source CSV convention."""
+    return d.strftime("%d/%m/%Y")
 
 
 def generate_todays_orders(n_orders, so_start):

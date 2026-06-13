@@ -95,7 +95,7 @@ SO_START = 400000   # no overlap with production or incremental test data
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def fmt_date(d):
-    return d.strftime("%-d/%m/%Y")
+    return d.strftime("%d/%m/%Y")
 
 
 def base_row(so_counter, line=1, order_date=None):
