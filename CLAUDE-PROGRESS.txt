@@ -5,7 +5,11 @@ Last updated  : 2026-06-13
 Last session  : Completed Phase 4 — Airflow running in Docker, connecting to
                 the host "adventureworks" warehouse DB (ADR-012). DAG
                 adventureworks_pipeline triggered twice; both runs succeeded
-                end to end with 28/28 dbt tests passing.
+                end to end with 28/28 dbt tests passing. Follow-up session
+                added staging.etl_log run logging, a new load_dims.py loader
+                for dimension refresh/SCD2 testing, and split the DAG into
+                load_facts_incremental + load_dims_full (parallel) ->
+                dbt_seed -> dbt_snapshot -> dbt_run -> dbt_test.
 Current phase : Phase 5 — Power BI
 ================================================================================
 
@@ -100,17 +104,35 @@ PHASE 2 — PYTHON LOADER
       - Adds batch_id = generate_batch_id() (once per batch)
       - Truncates staging tables before load (full load = clean slate)
       - Loads to staging schema
-      - Logs row counts per table
+      - Logs row counts per table to staging.etl_log + summary (utils/etl_log.py,
+        added in follow-up session — see NOTES LOG)
       - Triggers dbt run on completion (logs + continues if dbt not found —
         dbt project isn't runnable until Phase 3)
 
 [DONE] loader/load_incremental.py
-      - Reads CSVs from /data/ (fact_sales, fact_returns)
+      - Reads incremental batch CSVs from /data/test/ (fact_sales, fact_returns)
+        — fact_*_2020_2026.csv is full-load baseline only, never read here
+        (changed in follow-up session — see NOTES LOG)
       - Adds loaded_at + batch_id
       - Appends only — no truncate
       - dbt handles deduplication via surrogate key
-      - Logs new row counts per table
+      - Logs new row counts per table to staging.etl_log + summary
       - --file / --table flags for loading a single test batch CSV
+
+[DONE] loader/load_dims.py (added in follow-up session — see NOTES LOG)
+      - Truncates + reloads staging.dim_customer, staging.dim_product,
+        staging.dim_territory from /data/ only — fact tables untouched
+      - Adds loaded_at + batch_id, logs to staging.etl_log + summary
+      - Triggers dbt snapshot then dbt run (captures SCD2 diffs before
+        rebuilding dim_customer/dim_product)
+      - Use after editing dimension lookup CSVs to test SCD2 changes
+
+[DONE] utils/etl_log.py (added in follow-up session — see NOTES LOG)
+      - log_table_load() — inserts one row per table per run into
+        staging.etl_log (batch_id, load_type, table_name, source_file,
+        row_count, started_at, finished_at, status)
+      - log_run_summary() — logs a per-table row count summary block
+      - database/04_create_etl_log.sql creates staging.etl_log
 
 [DONE] .env file
       - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
@@ -237,8 +259,9 @@ PHASE 4 — DOCKER + AIRFLOW
 
 [DONE] airflow/dags/adventureworks_pipeline.py
       - Schedule: @daily, catchup=False
-      - Tasks in order:
-          load_to_staging → dbt_seed → dbt_snapshot → dbt_run → dbt_test
+      - Tasks (updated in follow-up session — see NOTES LOG):
+          [load_facts_incremental, load_dims_full] → dbt_seed → dbt_snapshot
+          → dbt_run → dbt_test
       - On failure: retry once (5 min delay), then alert
 
 [DONE] Test: docker-compose up — all services healthy
@@ -438,6 +461,48 @@ NOTES LOG
     unbounded duplicates over time. Revisit in a future phase: either point
     the nightly DAG at a true daily-delta file, or have load_incremental.py
     deduplicate/prune superseded batches in staging.
+    RESOLVED in follow-up session (2026-06-13, see NOTES LOG below) —
+    load_incremental.py's default TABLES now points at small
+    data/test/*_incremental_today.csv batch files (a stand-in daily delta),
+    not the full historical CSV. Re-running with the same default files will
+    still append duplicate staging rows on each run (no loader-side dedup by
+    design — see Phase 2 NOTES), but no longer a full 341k-row batch.
+
+2026-06-13 — Pipeline refinements: ETL run logging, dim refresh loader, DAG split
+  - Added staging.etl_log (database/04_create_etl_log.sql) + utils/etl_log.py
+    (log_table_load, log_run_summary). load_full.py, load_incremental.py, and
+    load_dims.py all log one row per table per run (batch_id, load_type
+    'full'/'incremental'/'dims', table_name, source_file, row_count,
+    started_at/finished_at, status) and print a per-table summary to
+    logs/pipeline_YYYYMMDD.log. Documented in docs/data_dictionary.md.
+  - load_incremental.py: TABLES now points at
+    data/test/fact_sales_incremental_today.csv and
+    data/test/fact_returns_incremental_today.csv (the latter created this
+    session to match the fact_returns schema) instead of the
+    fact_*_2020_2026.csv full-history files — those remain full-load
+    baseline only (load_full.py), never read by the incremental loader.
+  - New loader/load_dims.py: truncates+reloads staging.dim_customer,
+    staging.dim_product, staging.dim_territory from /data/ only (fact
+    tables untouched), then triggers `dbt snapshot` (captures SCD2 diffs)
+    and `dbt run`. Use after editing the dimension lookup CSVs to test SCD2
+    changes.
+  - airflow/dags/adventureworks_pipeline.py: renamed load_to_staging ->
+    load_facts_incremental (load_incremental.py) and added load_dims_full
+    (load_dims.py); both run in parallel before
+    dbt_seed -> dbt_snapshot -> dbt_run -> dbt_test.
+  - Verified end to end: ran load_incremental.py (163 fact_sales rows + 3
+    fact_returns rows appended; mart 341,331 / 4,499) and load_dims.py
+    (no-op reload of unchanged CSVs: 18,148/293/15 rows; dbt snapshot
+    INSERT 0 0 for both snapshots, confirming no false SCD2 diffs); 28/28
+    dbt tests pass after each. staging.etl_log populated correctly for both
+    runs.
+  - Decided against a second DAG for dims: dbt snapshot/run/test operate on
+    the whole mart as one atomic step, so two DAGs would mean either
+    concurrent dbt invocations against the same schema or one DAG
+    triggering the other — more complexity than the single DAG with two
+    parallel load tasks, at this project's scale.
+  - Committed to phase-4-docker-airflow (879b6e1) — not yet pushed; updates
+    open PR #3.
 
 ================================================================================
 CURRENT BLOCKERS

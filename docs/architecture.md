@@ -180,9 +180,30 @@ fully rebuilt on every run.
 WAL/binlog enabled. Timestamp-based incremental is the correct pattern for batch
 file exports and is used in production D365 integrations globally.
 
-**Full load vs incremental:**
-- `load_full.py` — run once to establish the baseline
-- `load_incremental.py` — run nightly by Airflow, picks up only new rows
+**Loader scripts:**
+- `load_full.py` — run once to establish the baseline. Truncates and reloads
+  all 5 staging tables (`fact_sales`, `fact_returns`, `dim_customer`,
+  `dim_product`, `dim_territory`) from `/data/`.
+- `load_incremental.py` — run nightly by Airflow. Appends new rows to
+  `staging.fact_sales`/`staging.fact_returns` only, from a daily delta batch
+  file (`data/test/fact_*_incremental_today.csv` — stands in for a real D365
+  daily extract). The `fact_*_2020_2026.csv` files are full-load baseline
+  only and are never read here.
+- `load_dims.py` — truncates and reloads `staging.dim_customer`,
+  `staging.dim_product`, `staging.dim_territory` from `/data/` only (fact
+  tables untouched). Run after editing the dimension lookup CSVs to simulate
+  SCD2 attribute changes; triggers `dbt snapshot` (captures the SCD2 diff)
+  then `dbt run`.
+
+### ETL Run Logging
+
+Every loader run writes one row per table to `staging.etl_log` via
+`utils/etl_log.py` — `batch_id`, `load_type` (`full`/`incremental`/`dims`),
+`table_name`, `source_file`, `row_count`, `started_at`/`finished_at`,
+`status`. The same run also prints a per-table row-count summary to
+`logs/pipeline_YYYYMMDD.log`. This is a monitoring/audit table only — not a
+dbt source, not part of the star schema (see `docs/data_dictionary.md` and
+ADR-013).
 
 ---
 
@@ -208,8 +229,18 @@ Postgres instance, reached via `host.docker.internal` (see ADR-012).
 **DAG:** `adventureworks_pipeline`
 
 ```
-load_csvs_to_staging → dbt_seed → dbt_snapshot → dbt_run → dbt_test
+load_facts_incremental ──┐
+                          ├──→ dbt_seed → dbt_snapshot → dbt_run → dbt_test
+load_dims_full ───────────┘
 ```
+
+- `load_facts_incremental` — appends new rows to `staging.fact_sales`/
+  `staging.fact_returns` (`load_incremental.py`)
+- `load_dims_full` — truncates+reloads `staging.dim_customer`/`dim_product`/
+  `dim_territory` from `/data/` (`load_dims.py`)
+- Both run in parallel; both must succeed before `dbt_seed` starts, since
+  `dbt_snapshot` needs the (possibly refreshed) dim staging tables and
+  `dbt_run` needs the (possibly appended) fact staging tables.
 
 **Schedule:** Nightly (`@daily`)  
 **Catchup:** False — missed runs are not backfilled  
@@ -307,3 +338,13 @@ on every visual interaction — unnecessary latency with no benefit at this data
 - **Decision:** `airflow/docker-compose.yml` runs Airflow (webserver, scheduler, init) plus a `postgres` service — but that `postgres` service is Airflow's own metadata database only. The `adventureworks` warehouse database continues to run as the local Windows Postgres 16 service established in Phase 1 (see the Phase 1 note in `CLAUDE-PROGRESS.txt`). The Airflow containers reach it via `host.docker.internal`, with `DB_HOST` overridden to that value in the compose environment (all other `DB_*` vars are loaded from the project `.env` via `env_file`).
 - **Reason:** The warehouse is already built, loaded (341k+ rows), and fully tested (Phase 3, 28/28 dbt tests) against the Windows Postgres instance. Containerizing it for Phase 4 would mean standing up a second Postgres, re-running `database/01-03` DDL and the full load + dbt pipeline, and repointing `.env` — pure migration work with no benefit to the orchestration goal of this phase.
 - **Trade-off:** The stack is not fully portable via `docker-compose up` alone — a Postgres server must already exist on the host with the `adventureworks` database loaded. This is acceptable for a local portfolio project; `docs/architecture.md`'s "PostgreSQL in Docker" framing is superseded for the warehouse DB by this ADR (Airflow's own metadata DB is still containerized as designed).
+
+### ADR-013: staging.etl_log for pipeline run logging
+- **Decision:** Add `staging.etl_log` (`database/04_create_etl_log.sql`) plus `utils/etl_log.py` (`log_table_load`, `log_run_summary`). Every loader script (`load_full.py`, `load_incremental.py`, `load_dims.py`) inserts one row per table per run and logs a per-table row-count summary to `logs/pipeline_YYYYMMDD.log`.
+- **Reason:** Need a queryable record of what loaded, how many rows, and when — "which tables were updated and how many new rows" per pipeline run — without standing up a separate monitoring stack.
+- **Trade-off:** No alerting/dashboarding; `etl_log` is queried manually (`SELECT * FROM staging.etl_log ORDER BY started_at DESC`). The `status`/`message` columns leave room to add alerting later if needed. Acceptable for this project's scope.
+
+### ADR-014: Dimension refresh split into its own loader (load_dims.py) + DAG task
+- **Decision:** New `loader/load_dims.py` truncates+reloads only `staging.dim_customer`/`dim_product`/`dim_territory` from `/data/`, separate from `load_full.py` (reloads facts + dims, run once for baseline) and `load_incremental.py` (facts only, nightly). `load_incremental.py`'s default source also changed from the full `fact_*_2020_2026.csv` baseline files to small `data/test/fact_*_incremental_today.csv` batch files representing a daily delta. The DAG runs `load_facts_incremental` and `load_dims_full` in parallel before `dbt_seed → dbt_snapshot → dbt_run → dbt_test`.
+- **Reason:** Testing SCD2 (editing `dim_customer`/`dim_product` lookup CSVs and reloading staging) must not disturb the fact tables. Re-running `load_full.py` would truncate+reload `fact_sales`/`fact_returns` from the 2020-2026 baseline, discarding any incrementally-loaded rows already in mart — and `load_full.py` is documented as a one-time baseline step (see CLAUDE.md). A dedicated dims-only loader avoids both problems.
+- **Trade-off:** Two loader entry points beyond `load_full.py` to keep in sync if the staging schema changes. `load_incremental.py` and `load_dims.py` each also call `dbt run`/`dbt snapshot` directly at the end (pre-existing pattern) — inside the Airflow container `dbt` is on PATH, so these run in addition to the DAG's own `dbt_seed`/`dbt_snapshot`/`dbt_run`/`dbt_test` tasks. Redundant but idempotent, so harmless. A second DAG for dims was considered and rejected — `dbt snapshot`/`run`/`test` operate on the whole mart as one atomic step, so two DAGs would require either concurrent `dbt` invocations against the same schema or one DAG triggering the other, more complexity than one DAG with two parallel load tasks at this project's scale.
