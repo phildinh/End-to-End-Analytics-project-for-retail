@@ -48,7 +48,7 @@ adventureworks-analytics/
 ├── CLAUDE-PROGRESS.txt     ← read this first every session
 ├── data/                   ← source CSV files — do not modify
 ├── database/               ← PostgreSQL DDL — run in order (01, 02, 03)
-├── loader/                 ← load_full.py, load_incremental.py
+├── loader/                 ← load_full.py, load_incremental.py, load_dims.py
 ├── utils/                  ← db_connection.py, logger.py, file_utils.py
 ├── logs/                   ← runtime logs — gitignored
 ├── dbt/
@@ -88,6 +88,8 @@ adventureworks-analytics/
 ### Python
 - Always import `utils.db_connection` — never define connections inline
 - Always import `utils.logger` — never use bare `print()`
+- Always import `utils.etl_log` — after loading each table, call `log_table_load()`
+  (writes to `staging.etl_log`) and `log_run_summary()` at the end of the run
 - Batch ID format: `YYYYMMDD_HHmmss` — generated once at script start
 - `loaded_at` = `datetime.now()` set once per batch, not per row
 - CSV encoding: `latin-1`
@@ -139,6 +141,10 @@ adventureworks-analytics/
 - Idempotent: same batch re-run = no duplicates (surrogate key is deterministic md5)
 - Full load: `load_full.py` — run once only to establish baseline
 - Incremental: `load_incremental.py` — triggered nightly by Airflow
+- Dimension refresh: `load_dims.py` — truncates+reloads dim_customer, dim_product,
+  dim_territory from `/data/` only (fact tables untouched); run after editing
+  dimension lookup CSVs (e.g. SCD2 attribute changes), then triggers
+  `dbt snapshot` followed by `dbt run`
 
 ---
 

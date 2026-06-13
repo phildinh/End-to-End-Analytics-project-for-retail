@@ -1,11 +1,17 @@
 """
-load_full.py
+load_dims.py
 ------------------------------------------------------------
-Full load — reads all source CSVs from /data/, truncates every
-staging table, and loads a clean baseline into the staging schema.
+Dimension refresh load — truncates and reloads staging.dim_customer,
+staging.dim_product, staging.dim_territory from /data/. Fact tables
+(fact_sales, fact_returns) are not touched.
 
-Run once to establish the baseline:
-    python loader/load_full.py
+Use this after editing the dimension lookup CSVs in /data/ (e.g. to
+simulate SCD2 attribute changes for dim_customer/dim_product). Snapshots
+must run before dbt run so the SCD2 diff is captured:
+
+    1. Edit AdventureWorks Customer/Product/Territory Lookup.csv in /data/
+    2. python loader/load_dims.py
+       (this also triggers dbt snapshot, then dbt run)
 """
 
 import os
@@ -22,18 +28,30 @@ from utils.etl_log import log_run_summary, log_table_load
 from utils.file_utils import generate_batch_id, read_csv, validate_file_exists
 from utils.logger import get_logger
 
-logger = get_logger("load_full")
+logger = get_logger("load_dims")
 
 DATA_PATH = os.getenv("DATA_PATH", "./data")
 
 # staging table -> (source CSV filename, date columns to parse)
 TABLES = {
-    "fact_sales": ("fact_sales_2020_2026.csv", ["OrderDate", "StockDate"]),
-    "fact_returns": ("fact_returns_2020_2026.csv", ["ReturnDate"]),
     "dim_customer": ("AdventureWorks Customer Lookup.csv", ["BirthDate"]),
     "dim_product": ("AdventureWorks Product Lookup.csv", None),
     "dim_territory": ("AdventureWorks Territory Lookup.csv", None),
 }
+
+
+def trigger_dbt_snapshot() -> None:
+    """Run `dbt snapshot` from the dbt/ project directory."""
+    dbt_dir = ROOT_DIR / "dbt"
+    try:
+        result = subprocess.run(
+            ["dbt", "snapshot"], cwd=dbt_dir, capture_output=True, text=True, check=True
+        )
+        logger.info(result.stdout)
+    except FileNotFoundError:
+        logger.error("dbt executable not found — skipping dbt snapshot")
+    except subprocess.CalledProcessError as exc:
+        logger.error(f"dbt snapshot failed:\n{exc.stdout}\n{exc.stderr}")
 
 
 def trigger_dbt_run() -> None:
@@ -50,12 +68,12 @@ def trigger_dbt_run() -> None:
         logger.error(f"dbt run failed:\n{exc.stdout}\n{exc.stderr}")
 
 
-def run_full_load() -> None:
+def run_dims_load() -> None:
     engine = get_engine()
     batch_id = generate_batch_id()
     loaded_at = datetime.now()
 
-    logger.info(f"Starting full load — batch_id={batch_id}")
+    logger.info(f"Starting dimension load — batch_id={batch_id}")
 
     summary = []
     for table_name, (csv_file, date_columns) in TABLES.items():
@@ -73,13 +91,14 @@ def run_full_load() -> None:
         finished_at = datetime.now()
 
         logger.info(f"Loaded {len(df)} rows into staging.{table_name}")
-        log_table_load(engine, batch_id, "full", table_name, filepath, len(df), started_at, finished_at)
+        log_table_load(engine, batch_id, "dims", table_name, filepath, len(df), started_at, finished_at)
         summary.append((table_name, len(df)))
 
-    logger.info("Full load complete")
-    log_run_summary(logger, "Full load", batch_id, summary)
+    logger.info("Dimension load complete")
+    log_run_summary(logger, "Dimension load", batch_id, summary)
+    trigger_dbt_snapshot()
     trigger_dbt_run()
 
 
 if __name__ == "__main__":
-    run_full_load()
+    run_dims_load()
