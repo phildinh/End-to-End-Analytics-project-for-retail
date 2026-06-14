@@ -3,8 +3,7 @@
 I built a complete analytics platform for a retail business: raw sales, returns, customer
 and product data flows through a PostgreSQL warehouse, gets transformed and tested with dbt,
 refreshes automatically every night with Airflow in Docker, and lands in a 4-page Power BI
-report that executives actually use to make decisions. 144K orders across 341K+ order lines,
-18K customers, 2020 to 2026.
+report that executives actually use to make decisions. 144K orders, 18K customers, 2020 to 2026.
 
 ## 30-Second Summary
 
