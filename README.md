@@ -1,9 +1,6 @@
 # AdventureWorks Analytics: End-to-End Retail BI Platform
 
-I built a complete analytics platform for a retail business: raw sales, returns, customer
-and product data flows through a PostgreSQL warehouse, gets transformed and tested with dbt,
-refreshes automatically every night with Airflow in Docker, and lands in a 4-page Power BI
-report that executives actually use to make decisions. 144K orders, 18K customers, 2020 to 2026.
+Built a complete retail analytics platform: sales, returns, customer, and product data flows through a PostgreSQL warehouse, transformed and tested with dbt (28/28 tests passing, SCD Type 2), refreshed nightly via Airflow in Docker, and delivered as a 4-page Power BI report for CEO and regional leaders to monitor overall business performance across $606M revenue, 144K orders, and 17.2K customers from 2020 to 2026.
 
 ## 30-Second Summary
 
